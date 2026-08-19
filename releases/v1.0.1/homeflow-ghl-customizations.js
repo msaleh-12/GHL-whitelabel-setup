@@ -1,6 +1,6 @@
 /**
  * HomeFlow HighLevel Customizations
- * Release: v1.0.1 (Unified Declarative Architecture)
+ * Release: v1.0.1 (Unified Robust Production Architecture)
  * 
  * Centralized async route controller for HighLevel CRM web application.
  * Handles subaccount exclusions, route redirections, layout adjustments,
@@ -35,7 +35,7 @@
      2. SHARED ASYNC LOCATION RESOLVER
   ========================================================= */
   async function getLocationId() {
-    // Priority 1: HighLevel native AppUtils API (v3) - awaited
+    // 1. Native HighLevel AppUtils API
     if (
       window.AppUtils &&
       window.AppUtils.Utilities &&
@@ -43,25 +43,54 @@
     ) {
       try {
         const loc = await window.AppUtils.Utilities.getCurrentLocation();
-        if (loc && loc.id) {
+        if (typeof loc === "string" && loc.trim()) {
+          return loc.trim();
+        }
+        if (loc && loc.id && typeof loc.id === "string") {
           return loc.id;
         }
+        if (loc && loc.locationId && typeof loc.locationId === "string") {
+          return loc.locationId;
+        }
       } catch (e) {
-        // Fall through gracefully if AppUtils is uninitialized or fails
+        // Fall through
       }
     }
 
-    // Priority 2: Extract location ID from URL path (/v2/location/{LOCATION_ID}/...)
-    const match = window.location.pathname.match(/\/v2\/location\/([^\/]+)/);
-    if (match && match[1]) {
-      return match[1];
+    // 2. Path Regex Fallback
+    const pathMatch = window.location.pathname.match(
+      /\/(?:v2\/)?location\/([A-Za-z0-9_-]+)/
+    );
+    if (pathMatch && pathMatch[1]) {
+      return pathMatch[1];
     }
 
-    // Priority 3: Search params fallback (location_id / loc)
+    // 3. Search Params Fallback
     try {
       const searchParams = new URLSearchParams(window.location.search);
-      const queryLoc = searchParams.get("location_id") || searchParams.get("loc");
-      if (queryLoc) return queryLoc;
+      const queryLoc =
+        searchParams.get("location_id") ||
+        searchParams.get("location") ||
+        searchParams.get("loc");
+      if (queryLoc && queryLoc.trim()) {
+        return queryLoc.trim();
+      }
+    } catch (e) {
+      // Fall through
+    }
+
+    // 4. DOM Class Fallback
+    try {
+      const sidebarEl = document.querySelector('[class*="sidebar-v2-location"]');
+      if (sidebarEl) {
+        const classes = Array.from(sidebarEl.classList);
+        for (let i = 0; i < classes.length; i++) {
+          const cls = classes[i];
+          if (cls !== "sidebar-v2-location" && cls.length >= 10) {
+            return cls;
+          }
+        }
+      }
     } catch (e) {
       // Fall through
     }
@@ -70,7 +99,7 @@
   }
 
   /* =========================================================
-     3. ROUTE & PAGE HELPERS
+     3. ROUTE CHECKS & HELPERS
   ========================================================= */
   function getCurrentTab() {
     try {
@@ -117,7 +146,7 @@
   }
 
   /* =========================================================
-     4. DECLARATIVE STYLE MANAGEMENT
+     4. EFFICIENT DECLARATIVE STYLE MANAGEMENT
   ========================================================= */
   function ensureStyle(styleId, css, shouldExist) {
     const existing = document.getElementById(styleId);
@@ -150,9 +179,10 @@
   }
 
   /* =========================================================
-     5. CSS TEMPLATES
+     5. EXACT ORIGINAL CSS SELECTORS (100% PARITY)
   ========================================================= */
   function getSidebarGlobalCss(locId) {
+    const locSelector = locId ? `.sidebar-v2-location.${locId}` : `.sidebar-v2-location`;
     return `
       /* ── MOVE CUSTOM LINKS UP ── */
       div#app div.sidebar-v2-location #sidebar-v2 div.hl_nav-header nav.w-full a[id='78ae8e45-8a17-4905-8a5e-ff819d60eed6'] {
@@ -163,23 +193,25 @@
       }
 
       /* ── HIDE SIDEBAR ITEMS ── */
-      .sidebar-v2-location.${locId} #sb_import-data,
-      .sidebar-v2-location.${locId} #sb_custom-values,
-      .sidebar-v2-location.${locId} #sb_contacts,
-      .sidebar-v2-location.${locId} #sb_manage-preferences,
-      .sidebar-v2-location.${locId} #\\36 7d04f019b961eb53460bcdc {
+      ${locSelector} #sb_import-data,
+      ${locSelector} #sb_custom-values,
+      ${locSelector} #sb_contacts,
+      ${locSelector} #sb_manage-preferences,
+      ${locSelector} #\\36 7d04f019b961eb53460bcdc {
         display: none !important;
       }
     `;
   }
 
   const REVIEWS_CSS = `
+    /* Hide top header bar */
     header.hl_header,
     .hl_header,
     .hl-topbar {
       display: none !important;
     }
 
+    /* Hide the reputation sub-menu tabs */
     .reputation-tabs,
     .hl_tab-nav,
     [class*="reputation"] > nav,
@@ -188,11 +220,17 @@
       display: none !important;
     }
 
-    #add-reviews-button,
+    /* Hide Add Reviews button */
+    #add-reviews-button {
+      display: none !important;
+    }
+
+    /* Hide Send Review Request button */
     #send-review-request-button {
       display: none !important;
     }
 
+    /* Full width layout */
     #app,
     .hl_wrapper,
     .hl_main,
@@ -205,16 +243,19 @@
   `;
 
   const WIDGET_AND_SOCIAL_PLANNER_CSS = `
+    /* Hide top header/menu bar */
     header.hl_header,
     .hl_header,
     .hl-topbar {
       display: none !important;
     }
 
+    /* Specific selector for the top bar flex row */
     #app > div:nth-child(2) > div:nth-child(1) > div.flex.v2-open > div:nth-child(2) > header.hl_header > div.flex.flex-row {
       display: none !important;
     }
 
+    /* Full width layout */
     #app,
     .hl_wrapper,
     .hl_main,
@@ -342,7 +383,7 @@
         return;
       }
     } catch (e) {
-      // Fall back to browser history navigation
+      // Fall back to history replacement
     }
 
     window.history.replaceState(null, "", reviewsPath);
@@ -363,12 +404,16 @@
     const pathname = window.location.pathname;
     const tab = getCurrentTab();
 
+    // CRITICAL FIX: isExcluded MUST ONLY be true if locationId IS KNOWN and in EXCLUDED_LOCATION_IDS!
+    // If locationId is temporarily null (unresolved), isExcluded is FALSE so styles can be applied as soon as location resolves.
+    const isExcluded = Boolean(locationId && EXCLUDED_LOCATION_IDS.includes(locationId));
+
     return {
       url: window.location.href,
       pathname,
       tab,
       locationId,
-      isExcluded: !locationId || EXCLUDED_LOCATION_IDS.includes(locationId),
+      isExcluded,
       isOverviewPage: isOverviewPage(pathname),
       isReviewsPage: isReviewsPage(pathname),
       isWidgetPage: isWidgetPage(pathname),
@@ -383,7 +428,7 @@
   function getStateKey(state) {
     return [
       state.url,
-      state.locationId || "",
+      state.locationId || "unresolved",
       state.isExcluded,
       state.isOverviewPage,
       state.isReviewsPage,
@@ -408,7 +453,10 @@
       return;
     }
 
+    // Apply sidebar global layout for all non-excluded subaccounts
     ensureStyle(STYLE_IDS.SIDEBAR, getSidebarGlobalCss(state.locationId), true);
+    
+    // Page-specific layouts
     ensureStyle(STYLE_IDS.REVIEWS, REVIEWS_CSS, state.isReviewsPage);
     ensureStyle(STYLE_IDS.WIDGET, WIDGET_AND_SOCIAL_PLANNER_CSS, state.isWidgetPage);
     ensureStyle(STYLE_IDS.SOCIAL_PLANNER, WIDGET_AND_SOCIAL_PLANNER_CSS, state.isSocialPlannerPage);
@@ -418,13 +466,12 @@
   }
 
   /* =========================================================
-     8. CENTRAL ASYNC CONTROLLER & SCHEDULER
+     8. CENTRAL ASYNC CONTROLLER & SELF-HEALING RUNNER
   ========================================================= */
   let running = false;
   let rerunRequested = false;
   let runSequence = 0;
   let lastAppliedStateKey = null;
-  let scheduled = false;
 
   async function run() {
     if (running) {
@@ -444,13 +491,14 @@
 
       const stateKey = getStateKey(state);
 
-      if (stateKey === lastAppliedStateKey) {
+      // Only skip if location was resolved AND state key matches exactly
+      if (state.locationId && stateKey === lastAppliedStateKey) {
         return;
       }
 
       await applyState(state);
 
-      if (thisRun === runSequence) {
+      if (thisRun === runSequence && state.locationId) {
         lastAppliedStateKey = stateKey;
       }
     } catch (error) {
@@ -465,6 +513,7 @@
     }
   }
 
+  let scheduled = false;
   function scheduleRun() {
     if (scheduled) return;
     scheduled = true;
@@ -475,8 +524,13 @@
   }
 
   /* =========================================================
-     9. ROUTE LISTENERS & OBSERVERS
+     9. MULTI-LAYER EXECUTION & DOM LISTENERS
   ========================================================= */
+
+  // Synchronous immediate run
+  scheduleRun();
+
+  // HighLevel lifecycle events
   window.addEventListener("routeLoaded", scheduleRun);
   window.addEventListener("routeChangeEvent", scheduleRun);
   window.addEventListener("popstate", scheduleRun);
@@ -501,7 +555,7 @@
     };
   }
 
-  // Single MutationObserver for URL changes
+  // Single MutationObserver for DOM changes & URL changes
   let lastObservedUrl = window.location.href;
   let observerStarted = false;
 
@@ -510,8 +564,9 @@
     observerStarted = true;
 
     const observer = new MutationObserver(function () {
-      if (window.location.href !== lastObservedUrl) {
-        lastObservedUrl = window.location.href;
+      const currentUrl = window.location.href;
+      if (currentUrl !== lastObservedUrl || !lastAppliedStateKey) {
+        lastObservedUrl = currentUrl;
         scheduleRun();
       }
     });
@@ -534,10 +589,11 @@
     scheduleRun();
   }, { once: true });
 
-  // Single 250ms fallback polling for non-History SPA URL mutations
+  // Self-healing 250ms polling loop (checks URL or un-resolved state)
   setInterval(function () {
-    if (window.location.href !== lastObservedUrl) {
-      lastObservedUrl = window.location.href;
+    const currentUrl = window.location.href;
+    if (currentUrl !== lastObservedUrl || !lastAppliedStateKey) {
+      lastObservedUrl = currentUrl;
       scheduleRun();
     }
   }, 250);

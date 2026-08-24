@@ -18,6 +18,7 @@
   ];
 
   const EXCLUSION_API_ENDPOINT = "https://ghl-whitelabel-setup.vercel.app/api/location-exclusion";
+  const EXCLUSION_TTL_MS = 60 * 1000; // 60 seconds TTL
 
   const HOMEFLOW_LOCATION_ID = "XzzLQ42sqJR43o30CP34";
 
@@ -36,8 +37,32 @@
   /* =========================================================
      2. DYNAMIC LOCATION EXCLUSION RESOLVER (CACHE & DEDUPLICATION)
   ========================================================= */
-  const exclusionCache = new Map(); // locationId => boolean
+  const exclusionCache = new Map(); // locationId => { value: boolean, verifiedAt: number }
   const inFlightRequests = new Map(); // locationId => Promise<boolean>
+
+  function getStoredResult(cleanLocId) {
+    // 1. Check in-memory cache
+    if (exclusionCache.has(cleanLocId)) {
+      return exclusionCache.get(cleanLocId);
+    }
+
+    // 2. Check sessionStorage fallback
+    try {
+      const storageKey = "homeflow:location-exclusion:" + cleanLocId;
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.value === "boolean" && typeof parsed.verifiedAt === "number") {
+          exclusionCache.set(cleanLocId, parsed);
+          return parsed;
+        }
+      }
+    } catch (e) {
+      // Storage access blocked or parse error
+    }
+
+    return null;
+  }
 
   async function isLocationExcluded(locationId) {
     if (!locationId || typeof locationId !== "string" || !locationId.trim()) {
@@ -51,9 +76,12 @@
       return true;
     }
 
-    // 2. In-Memory Session Cache
-    if (exclusionCache.has(cleanLocId)) {
-      return exclusionCache.get(cleanLocId);
+    const now = Date.now();
+    const existing = getStoredResult(cleanLocId);
+
+    // 2. Fresh Cache Hit (within 60s TTL)
+    if (existing && (now - existing.verifiedAt) < EXCLUSION_TTL_MS) {
+      return existing.value;
     }
 
     // 3. In-Flight Request Deduplication
@@ -61,26 +89,13 @@
       return await inFlightRequests.get(cleanLocId);
     }
 
-    // 4. SessionStorage Check
-    try {
-      const storageKey = "homeflow:location-exclusion:" + cleanLocId;
-      const storedVal = sessionStorage.getItem(storageKey);
-      if (storedVal === "true") {
-        exclusionCache.set(cleanLocId, true);
-        return true;
-      } else if (storedVal === "false") {
-        exclusionCache.set(cleanLocId, false);
-        return false;
-      }
-    } catch (e) {
-      // Storage access blocked or restricted
-    }
-
-    // 5. Backend Verification Request with In-Flight Deduplication
+    // 4. Backend Verification Request with In-Flight Deduplication
     const fetchPromise = (async () => {
+      let timeoutId = null;
+
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 7000); // 7s timeout
+        timeoutId = setTimeout(() => controller.abort(), 7000); // 7s timeout
 
         const apiUrl = EXCLUSION_API_ENDPOINT + "?locationId=" + encodeURIComponent(cleanLocId);
 
@@ -92,8 +107,6 @@
           signal: controller.signal
         });
 
-        clearTimeout(timeoutId);
-
         if (!response.ok) {
           throw new Error("HTTP status " + response.status);
         }
@@ -103,14 +116,15 @@
         // Strict boolean payload validation
         if (data && typeof data.excluded === "boolean") {
           const result = data.excluded;
+          const entry = { value: result, verifiedAt: Date.now() };
 
           // Cache in memory
-          exclusionCache.set(cleanLocId, result);
+          exclusionCache.set(cleanLocId, entry);
 
           // Cache in sessionStorage
           try {
             const storageKey = "homeflow:location-exclusion:" + cleanLocId;
-            sessionStorage.setItem(storageKey, String(result));
+            sessionStorage.setItem(storageKey, JSON.stringify(entry));
           } catch (e) {
             // Ignore storage errors
           }
@@ -122,23 +136,20 @@
       } catch (error) {
         console.warn("[GHL White Label Customizations] Location exclusion check failed for", cleanLocId, ":", error.message);
 
-        // Fallback Priority 1: Use last-known valid result in sessionStorage if available
-        try {
-          const storageKey = "homeflow:location-exclusion:" + cleanLocId;
-          const storedVal = sessionStorage.getItem(storageKey);
-          if (storedVal === "true" || storedVal === "false") {
-            const fallbackResult = storedVal === "true";
-            exclusionCache.set(cleanLocId, fallbackResult);
-            return fallbackResult;
-          }
-        } catch (e) {
-          // Ignore storage errors
+        // Fallback Priority 1: Use last-known valid result for SAME location (even if expired)
+        const lastKnown = getStoredResult(cleanLocId);
+        if (lastKnown && typeof lastKnown.value === "boolean") {
+          return lastKnown.value;
         }
 
-        // Fallback Priority 2: Fail open (isExcluded = false) so CRM functionality is not broken.
-        // DO NOT cache false in memory or sessionStorage on failure.
+        // Fallback Priority 2: Fail open (false) if no previous valid result exists.
+        // DO NOT write a new cache entry on failure.
         return false;
       } finally {
+        // Always clean up timeout timer in finally block
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         inFlightRequests.delete(cleanLocId);
       }
     })();
@@ -589,6 +600,7 @@
 
   async function run() {
     if (running) {
+      runSequence++; // Immediately invalidate currently running async execution on new run trigger!
       rerunRequested = true;
       return;
     }
@@ -599,6 +611,7 @@
     try {
       const state = await buildState();
 
+      // Immediate check: If runSequence changed while awaiting buildState(), discard this run immediately!
       if (thisRun !== runSequence) {
         return;
       }
@@ -629,6 +642,7 @@
 
   let scheduled = false;
   function scheduleRun() {
+    runSequence++; // Increment run sequence immediately whenever a new run is scheduled!
     if (scheduled) return;
     scheduled = true;
     Promise.resolve().then(function () {

@@ -597,15 +597,25 @@
   let rerunRequested = false;
   let runSequence = 0;
   let lastAppliedStateKey = null;
+  let activeRunUrl = null;
+
+  function invalidateIfContextChanged() {
+    const currentUrl = window.location.href;
+    if (activeRunUrl && currentUrl !== activeRunUrl) {
+      runSequence++;
+      activeRunUrl = currentUrl;
+    }
+  }
 
   async function run() {
     if (running) {
-      runSequence++; // Immediately invalidate currently running async execution on new run trigger!
+      invalidateIfContextChanged();
       rerunRequested = true;
       return;
     }
 
     running = true;
+    activeRunUrl = window.location.href;
     const thisRun = ++runSequence;
 
     try {
@@ -642,7 +652,8 @@
 
   let scheduled = false;
   function scheduleRun() {
-    runSequence++; // Increment run sequence immediately whenever a new run is scheduled!
+    invalidateIfContextChanged();
+
     if (scheduled) return;
     scheduled = true;
     Promise.resolve().then(function () {

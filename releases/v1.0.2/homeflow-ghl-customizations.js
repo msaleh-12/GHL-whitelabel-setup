@@ -12,10 +12,15 @@
   /* =========================================================
      1. CONFIGURATION & CONSTANTS
   ========================================================= */
-  const LEGACY_EXCLUDED_LOCATION_IDS = [
-    "3hxU86Tlg4Hj231eATmo",
-    "wU0QPFEzdTl7CpndxylS"
-  ];
+  // Legacy hardcoded exclusions disabled — these two Location IDs must now
+  // exist as rows in one of the two Supabase `ghl_installations` tables for
+  // their exclusion to keep working. Left commented (not deleted) for quick
+  // rollback if needed.
+  // const LEGACY_EXCLUDED_LOCATION_IDS = [
+  //   "3hxU86Tlg4Hj231eATmo",
+  //   "wU0QPFEzdTl7CpndxylS"
+  // ];
+  const LEGACY_EXCLUDED_LOCATION_IDS = [];
 
   const EXCLUSION_API_ENDPOINT = "https://ghl-whitelabel-setup.vercel.app/api/location-exclusion";
   const EXCLUSION_TTL_MS = 60 * 1000; // 60 seconds TTL
@@ -486,7 +491,7 @@
      7. REPUTATION OVERVIEW REDIRECT
   ========================================================= */
   async function redirectToReviews(state) {
-    if (state.isExcluded || !state.locationId || !state.isOverviewPage) {
+    if (!state.isExcluded || !state.locationId || !state.isOverviewPage) {
       return;
     }
 
@@ -567,7 +572,9 @@
   }
 
   async function applyState(state) {
-    if (state.isExcluded) {
+    // Not found in either Supabase project: preserve default,
+    // unmodified GHL behavior (original Contacts tab visible).
+    if (!state.isExcluded) {
       removeAllLayouts();
       return;
     }
@@ -578,7 +585,8 @@
       return;
     }
 
-    // Apply sidebar global layout for all non-excluded subaccounts
+    // Apply the full customization suite (including hiding the Contacts tab)
+    // only for locations found in Supabase.
     ensureStyle(STYLE_IDS.SIDEBAR, getSidebarGlobalCss(state.locationId), true);
     
     // Page-specific layouts

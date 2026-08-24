@@ -1,7 +1,6 @@
 /**
- * This is test version before deploying actually
  * HomeFlow HighLevel Customizations
- * Release: v1.0.2 (Test Version / Pre-release)
+ * Release: v1.0.2 (Unified Robust Production Architecture with Dynamic Exclusion)
  * 
  * Centralized async route controller for HighLevel CRM web application.
  * Handles subaccount exclusions, route redirections, layout adjustments,
@@ -13,10 +12,12 @@
   /* =========================================================
      1. CONFIGURATION & CONSTANTS
   ========================================================= */
-  const EXCLUDED_LOCATION_IDS = [
+  const LEGACY_EXCLUDED_LOCATION_IDS = [
     "3hxU86Tlg4Hj231eATmo",
     "wU0QPFEzdTl7CpndxylS"
   ];
+
+  const EXCLUSION_API_ENDPOINT = "https://ghl-whitelabel-setup.vercel.app/api/location-exclusion";
 
   const HOMEFLOW_LOCATION_ID = "XzzLQ42sqJR43o30CP34";
 
@@ -33,7 +34,121 @@
   const ALL_STYLE_IDS = Object.values(STYLE_IDS);
 
   /* =========================================================
-     2. SHARED ASYNC LOCATION RESOLVER
+     2. DYNAMIC LOCATION EXCLUSION RESOLVER (CACHE & DEDUPLICATION)
+  ========================================================= */
+  const exclusionCache = new Map(); // locationId => boolean
+  const inFlightRequests = new Map(); // locationId => Promise<boolean>
+
+  async function isLocationExcluded(locationId) {
+    if (!locationId || typeof locationId !== "string" || !locationId.trim()) {
+      return false;
+    }
+
+    const cleanLocId = locationId.trim();
+
+    // 1. Legacy Hardcoded Exclusions (Instant Match)
+    if (LEGACY_EXCLUDED_LOCATION_IDS.includes(cleanLocId)) {
+      return true;
+    }
+
+    // 2. In-Memory Session Cache
+    if (exclusionCache.has(cleanLocId)) {
+      return exclusionCache.get(cleanLocId);
+    }
+
+    // 3. In-Flight Request Deduplication
+    if (inFlightRequests.has(cleanLocId)) {
+      return await inFlightRequests.get(cleanLocId);
+    }
+
+    // 4. SessionStorage Check
+    try {
+      const storageKey = "homeflow:location-exclusion:" + cleanLocId;
+      const storedVal = sessionStorage.getItem(storageKey);
+      if (storedVal === "true") {
+        exclusionCache.set(cleanLocId, true);
+        return true;
+      } else if (storedVal === "false") {
+        exclusionCache.set(cleanLocId, false);
+        return false;
+      }
+    } catch (e) {
+      // Storage access blocked or restricted
+    }
+
+    // 5. Backend Verification Request with In-Flight Deduplication
+    const fetchPromise = (async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 7000); // 7s timeout
+
+        const apiUrl = EXCLUSION_API_ENDPOINT + "?locationId=" + encodeURIComponent(cleanLocId);
+
+        const response = await fetch(apiUrl, {
+          method: "GET",
+          headers: {
+            "Accept": "application/json"
+          },
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error("HTTP status " + response.status);
+        }
+
+        const data = await response.json();
+
+        // Strict boolean payload validation
+        if (data && typeof data.excluded === "boolean") {
+          const result = data.excluded;
+
+          // Cache in memory
+          exclusionCache.set(cleanLocId, result);
+
+          // Cache in sessionStorage
+          try {
+            const storageKey = "homeflow:location-exclusion:" + cleanLocId;
+            sessionStorage.setItem(storageKey, String(result));
+          } catch (e) {
+            // Ignore storage errors
+          }
+
+          return result;
+        }
+
+        throw new Error("Invalid API payload structure");
+      } catch (error) {
+        console.warn("[GHL White Label Customizations] Location exclusion check failed for", cleanLocId, ":", error.message);
+
+        // Fallback Priority 1: Use last-known valid result in sessionStorage if available
+        try {
+          const storageKey = "homeflow:location-exclusion:" + cleanLocId;
+          const storedVal = sessionStorage.getItem(storageKey);
+          if (storedVal === "true" || storedVal === "false") {
+            const fallbackResult = storedVal === "true";
+            exclusionCache.set(cleanLocId, fallbackResult);
+            return fallbackResult;
+          }
+        } catch (e) {
+          // Ignore storage errors
+        }
+
+        // Fallback Priority 2: Fail open (isExcluded = false) so CRM functionality is not broken.
+        // DO NOT cache false in memory or sessionStorage on failure.
+        return false;
+      } finally {
+        inFlightRequests.delete(cleanLocId);
+      }
+    })();
+
+    inFlightRequests.set(cleanLocId, fetchPromise);
+    return await fetchPromise;
+  }
+
+  /* =========================================================
+     3. SHARED ASYNC LOCATION RESOLVER
   ========================================================= */
   async function getLocationId() {
     // 1. Native HighLevel AppUtils API
@@ -100,7 +215,7 @@
   }
 
   /* =========================================================
-     3. ROUTE CHECKS & HELPERS
+     4. ROUTE CHECKS & HELPERS
   ========================================================= */
   function getCurrentTab() {
     try {
@@ -147,7 +262,7 @@
   }
 
   /* =========================================================
-     4. EFFICIENT DECLARATIVE STYLE MANAGEMENT
+     5. EFFICIENT DECLARATIVE STYLE MANAGEMENT
   ========================================================= */
   function ensureStyle(styleId, css, shouldExist) {
     const existing = document.getElementById(styleId);
@@ -180,7 +295,7 @@
   }
 
   /* =========================================================
-     5. EXACT ORIGINAL CSS SELECTORS (100% PARITY)
+     6. EXACT ORIGINAL CSS SELECTORS (100% PARITY)
   ========================================================= */
   function getSidebarGlobalCss(locId) {
     const locSelector = locId ? `.sidebar-v2-location.${locId}` : `.sidebar-v2-location`;
@@ -357,7 +472,7 @@
   `;
 
   /* =========================================================
-     6. REPUTATION OVERVIEW REDIRECT
+     7. REPUTATION OVERVIEW REDIRECT
   ========================================================= */
   async function redirectToReviews(state) {
     if (state.isExcluded || !state.locationId || !state.isOverviewPage) {
@@ -398,16 +513,14 @@
   }
 
   /* =========================================================
-     7. STATE CALCULATOR & APPLIER
+     8. STATE CALCULATOR & APPLIER
   ========================================================= */
   async function buildState() {
     const locationId = await getLocationId();
     const pathname = window.location.pathname;
     const tab = getCurrentTab();
 
-    // CRITICAL FIX: isExcluded MUST ONLY be true if locationId IS KNOWN and in EXCLUDED_LOCATION_IDS!
-    // If locationId is temporarily null (unresolved), isExcluded is FALSE so styles can be applied as soon as location resolves.
-    const isExcluded = Boolean(locationId && EXCLUDED_LOCATION_IDS.includes(locationId));
+    const isExcluded = locationId ? await isLocationExcluded(locationId) : false;
 
     return {
       url: window.location.href,
@@ -456,7 +569,7 @@
 
     // Apply sidebar global layout for all non-excluded subaccounts
     ensureStyle(STYLE_IDS.SIDEBAR, getSidebarGlobalCss(state.locationId), true);
-
+    
     // Page-specific layouts
     ensureStyle(STYLE_IDS.REVIEWS, REVIEWS_CSS, state.isReviewsPage);
     ensureStyle(STYLE_IDS.WIDGET, WIDGET_AND_SOCIAL_PLANNER_CSS, state.isWidgetPage);
@@ -467,7 +580,7 @@
   }
 
   /* =========================================================
-     8. CENTRAL ASYNC CONTROLLER & SELF-HEALING RUNNER
+     9. CENTRAL ASYNC CONTROLLER & SELF-HEALING RUNNER
   ========================================================= */
   let running = false;
   let rerunRequested = false;
@@ -525,7 +638,7 @@
   }
 
   /* =========================================================
-     9. MULTI-LAYER EXECUTION & DOM LISTENERS
+     10. MULTI-LAYER EXECUTION & DOM LISTENERS
   ========================================================= */
 
   // Synchronous immediate run

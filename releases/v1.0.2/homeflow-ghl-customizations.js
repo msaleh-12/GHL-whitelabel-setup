@@ -491,7 +491,7 @@
      7. REPUTATION OVERVIEW REDIRECT
   ========================================================= */
   async function redirectToReviews(state) {
-    if (state.isExcluded || !state.locationId || !state.isOverviewPage) {
+    if (!state.isExcluded || !state.locationId || !state.isOverviewPage) {
       return;
     }
 
@@ -574,7 +574,7 @@
   async function applyState(state) {
     // Not found in either Supabase project: preserve default,
     // unmodified GHL behavior (original Contacts tab visible).
-    if (state.isExcluded) {
+    if (!state.isExcluded) {
       removeAllLayouts();
       return;
     }
@@ -588,7 +588,7 @@
     // Apply the full customization suite (including hiding the Contacts tab)
     // only for locations found in Supabase.
     ensureStyle(STYLE_IDS.SIDEBAR, getSidebarGlobalCss(state.locationId), true);
-    
+
     // Page-specific layouts
     ensureStyle(STYLE_IDS.REVIEWS, REVIEWS_CSS, state.isReviewsPage);
     ensureStyle(STYLE_IDS.WIDGET, WIDGET_AND_SOCIAL_PLANNER_CSS, state.isWidgetPage);

@@ -111,10 +111,7 @@ module.exports = async function handler(req, res) {
     // - s-maxage=60: Vercel CDN caches fresh result per query URL for 60s
     // - stale-while-revalidate=300: Serve stale cache up to 5 mins while revalidating
     // - stale-if-error=3600: Serve stale cache up to 1 hr if upstream revalidation fails
-    res.setHeader(
-      'Cache-Control',
-      'public, s-maxage=60, stale-while-revalidate=300, stale-if-error=3600'
-    );
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
 
     return res.status(200).json({ excluded: isExcluded });
   } catch (err) {
